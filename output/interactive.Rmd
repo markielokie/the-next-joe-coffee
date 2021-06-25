@@ -1,0 +1,304 @@
+---
+title: "**Explore coffee drinker reviews for better targeting and marketing to capture market share.**"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: yeti
+    orientation: rows
+    vertical_layout: scroll
+---
+
+<style type="text/css">
+
+.chart-title {
+    border-bottom: 1px solid #d7d7d7;
+    color: #333333;
+    font-size: 20px;
+    font-weight: 700;
+    padding: 7px 10px 4px;
+}
+
+.heading-level1 {  /* chart_title  */
+   color: #00467f;
+    font-size: 26px;
+    font-weight: 500;
+}
+
+</style>
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(lubridate)
+library(ggplot2)
+library(ggthemes)
+library(geojsonio)
+library(sf)
+library(ggiraph)
+library(tidyverse)
+library(ggplot2)
+library(plotly)
+library(crosstalk)
+library(DT)
+library(qdap)
+library(tm)
+library(patchwork)
+library(wordcloud2)
+library(igraph)
+library(ggraph)
+
+theme_clean2 <- 
+  theme_clean() + 
+  theme(
+    panel.grid.major.x = 
+      element_line(colour = "gray", 
+                   linetype = "dotted"),
+    plot.background = element_blank() )
+
+theme_set(theme_clean2)
+
+# Geographic boundaries
+spdf <- geojson_read('Borough_Boundaries.geojson', what = 'sp')
+df <- fortify(spdf)
+
+# Get subway station locations
+station_locations <- st_read("../Subway Stations/geo_export_d8ffe6f2-83c1-445f-928a-f97d71e1418b.shp")
+
+# Get coffee shop locations
+Yelp_evergreen <- read.csv("Yelp_full.csv")
+
+# Get wordcloud data
+text_df_wordcloud <- read.csv("text_df_wordcloud.csv")
+
+# Get Network diagram data
+bigrams_interactive <- read.csv("bigrams_interactive.csv")
+
+# Sentiment analysis
+sentiments <- polarity(removePunctuation(removeNumbers(tolower(Yelp_evergreen$text))), Yelp_evergreen$user_id)
+Yelp_new <- inner_join(Yelp_evergreen, sentiments[[1]], by = "user_id")
+Yelp_new %>%
+  summarise(mean = mean(polarity),
+            max = max(polarity),
+            min = min(polarity))
+
+# Choose selected columns
+coffeeshop_long_lat <- Yelp_new %>%
+  dplyr::select(longitude, latitude)
+
+coffeeshop_locations <- Yelp_new %>%
+  dplyr::select(name, longitude, latitude, rating.y, review_count, zip_code, polarity) %>%
+  dplyr::mutate(name = str_remove(name, "\'")) %>%
+  dplyr::filter(name != "Joe Coffee" & name != "Joe Coffee Company" &
+                  name != "Kuppi Coffee Company" & name != "Ispresso at park" &
+                  !str_detect(name, "Steven"))
+
+joecoffee <- Yelp_new %>%
+  dplyr::select(name, longitude, latitude, rating.y, review_count, zip_code, polarity) %>%
+  dplyr::filter(name == "Joe Coffee" | name == "Joe Coffee Company")
+
+station_locations <- station_locations %>%
+  dplyr::mutate(name = str_remove(name, "\'"))
+
+# Set boundaries for viewing data
+XMIN <- -74.02
+XMAX <- -73.9
+YMIN <- 40.67
+YMAX <- 40.82
+
+# Set coffee shop color
+COFFEESHOPCOLOR <- '#DBAE8C'
+JOECOFFEECOLOR <- '#409EDE'
+```
+
+Row {data-height=1000}
+-----------------------------------------------------------------------
+
+### Where does <font color="409EDE">Joe Coffee</font> stand amongst all <font color="DBAE8C">coffee shops</font> in NYC and does proximity to <font color="lightgray">subway stations</font> affect sentiment scores?     
+
+**How to explore :** <font color="888888">Hovering over any point on the map or histogram will link</font> <font color="DBAE8C">**coffee shop locations**</font> <font color="888888">and sentiment scores. Sentiment scores are computed using text analytics techniques on all text reviews for each</font> <font color="DBAE8C">**coffee shop**</font><font color="888888">. Sentiment scores above 0 indicate positive reviews while scores below 0 indicate negative reviews.</font>
+
+**Quick takes :** <font color="888888">The two</font> <font color="409EDE">**Joe Coffee outlets**</font> <font color="888888">have achieved positive reviews, likely due to good locations and good quality coffee, which is great news. But more interestingly, notice that</font> <font color="DBAE8C">**coffee shops**</font> <font color="888888">that are relatively further away from</font> <font color="lightgray">**subway stations**</font> <font color="888888">were still able to garner positive sentiment scores, which begs the question: do _location attributes_ (like proximity to</font> <font color="lightgray">**subway stations**</font><font color="888888">) really matter as much as _coffee attributes_ (like food and service quality) when it comes to sentiment scores?</font> 
+
+```{r, out.width="70%"}
+# Interactive map encoded with coffee shop locations and subway locations
+gg_map_2 <-
+  ggplot() + 
+  theme(panel.background = element_rect(fill = '#eeeeee')) +
+  coord_equal(xlim = c(XMIN, XMAX),
+              ylim = c(YMIN, YMAX)) +
+  geom_map(
+    data = df, 
+    map = df,
+    mapping = aes(
+      map_id = id), 
+    fill = '#ffffff', 
+    color = '#000000') +
+  geom_point_interactive(
+    data = subset(coffeeshop_locations, 
+                  longitude >= XMIN & longitude <= XMAX &
+                    latitude >= YMIN & latitude <= YMAX),
+    show.legend = F,
+    shape = 4,
+    size = 0.5,
+    mapping = aes(
+      x = longitude,
+      y = latitude,
+      size = 0.1,
+      color = JOECOFFEECOLOR,
+      tooltip = paste(
+        paste0('<span style="border-bottom: 1px solid; font-weight: 900;">', name, '</span>'),
+        paste0('<span style="color:gray;">Coffee Shop Information<br><br></span><span style="color:orangered;">No. of Reviews </span>', review_count),
+        paste0('<span style="color:orangered;">Sentiment Score: </span>', round(polarity, 3)),
+        sep = '\n'
+      ),
+      data_id = name
+    )
+  ) +
+  geom_sf_interactive(
+    data = station_locations,
+    size = 1,
+    shape = 21,
+    fill = "lightgray",
+    color = "black",
+    alpha = 0.7,
+    mapping = aes(
+      tooltip = paste(
+        paste0('<span style="border-bottom: 1px solid; font-weight: 900;">', name, '</span>'),
+        paste0('<span style="color:gray;">Subway Information<br><br></span><span style="color:darkgray;">Subway Line: </span>', line),
+        sep = '\n'
+      ),
+      data_id = name
+    )
+  ) +
+  coord_sf(xlim = c(XMIN, XMAX),
+           ylim = c(YMIN, YMAX),
+           datum = NA) +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank()) +
+  geom_point_interactive(
+    data = subset(joecoffee, 
+                  longitude >= XMIN & longitude <= XMAX &
+                    latitude >= YMIN & latitude <= YMAX),
+    show.legend = F,
+    shape = 17,
+    size = 1.5,
+    mapping = aes(
+      x = longitude,
+      y = latitude,
+      size = 0.1,
+      color = COFFEESHOPCOLOR,
+      tooltip = paste(
+        paste0('<span style="border-bottom: 1px solid; font-weight: 900;">', name, '</span>'),
+        paste0('<span style="color:gray;">Coffee Shop Information<br><br></span><span style="color:orangered;">No. of Reviews </span>', review_count),
+        paste0('<span style="color:orangered;">Sentiment Score: </span>', round(polarity, 3)),
+        sep = '\n'
+      ),
+      data_id = name
+    )
+  )
+
+# Plot distribution sentiment analysis on coffee shop reviews
+gg_histogram <- 
+ggplot() +
+  theme_gdocs() + 
+  geom_histogram_interactive(
+    data = subset(coffeeshop_locations,
+                  longitude >= XMIN & longitude <= XMAX &
+                    latitude >= YMIN & latitude <= YMAX),
+    mapping = aes(
+      x = polarity,
+      y = ..density..,
+      tooltip = paste(
+        paste0('<span style="border-bottom: 1px solid; font-weight: 900;">', name, '</span>'),
+        paste0('<span style="color:gray;">Coffee Shop Information<br><br></span><span style="color:orangered;">No. of Reviews </span>', review_count),
+        paste0('<span style="color:orangered;">Sentiment Score: </span>', round(polarity, 3)),
+        sep = '\n'
+      ),
+      data_id = name
+    ),
+    binwidth = 0.2, 
+    fill = "#F0DED0",
+    color = COFFEESHOPCOLOR) +
+  geom_histogram_interactive(
+    data = subset(joecoffee,
+                  longitude >= XMIN & longitude <= XMAX &
+                    latitude >= YMIN & latitude <= YMAX),
+    mapping = aes(
+      x = polarity,
+      y = ..density..,
+      tooltip = paste(
+        paste0('<span style="border-bottom: 1px solid; font-weight: 900;">', name, '</span>'),
+        paste0('<span style="color:gray;">Coffee Shop Information<br><br></span><span style="color:orangered;">No. of Reviews </span>', review_count),
+        paste0('<span style="color:orangered;">Sentiment Score: </span>', round(polarity, 3)),
+        sep = '\n'
+      ),
+      data_id = name),
+    binwidth = 0.2,
+    fill = JOECOFFEECOLOR,
+    color = JOECOFFEECOLOR) + 
+  theme(panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(size = 4),
+        axis.title.x = element_text(size = 6),
+        plot.background = element_rect(colour = NA)) +
+  xlab("Sentiment Score (for each coffee shop)")
+
+# Plot both graphics using girafe()
+girafe(code = print(gg_map_2 + gg_histogram),
+       options = list(
+         opts_sizing(rescale = T, width = 0.7),
+         opts_hover(
+           css = 'stroke-width:1;'),
+         opts_hover_inv(
+           css = 'stroke-opacity:0.1;'),
+         opts_tooltip(
+           css = 'background-color:white;color:black;font-size:10pt;padding:10px;',
+           offx = 10,
+           offy = 10
+         ),
+         opts_toolbar(saveaspng = F),
+         opts_zoom(max = 5)))
+```
+
+Row {data-height=900}
+-----------------------------------------------------------------------
+
+### Are _location attributes_ or _coffee attributes_ more important to coffee drinkers?
+
+**How to explore :** <font color="888888">Hovering over any word will show the number of times the word was used in the text reviews. Correspondingly, the size of the words relates to the number of times it was used; the</font> <font size="4" color="888888">**bigger**</font> <font color="888888">the word, the</font> <font size="4" color="888888">**more**</font> <font color="888888">times it was used, and vice versa.</font>
+
+**Quick takes :** <font color="888888">_Coffee attributes_ dominate the reviews. For instance, you see words like _delicious_, _latte_, _food_, _friendly_, _service_ and _milk_ appearing more. Of course, _location attributes_ still appear, but with reduced frequency---we see _outdoor_, _neighborhood_ and _location_---as compared to _coffee attributes_.</font> 
+
+```{r}
+text_df_wordcloud %>%
+  filter(freq > 3) %>%
+  wordcloud2(color = "random-dark",
+             minRotation = -pi/4,
+             maxRotation = pi/4,
+             rotateRatio = 0.4,
+             size = 0.8,
+             shape = "circle",
+             ellipticity = 0.65,
+             backgroundColor = "white")
+```
+
+-----------------------------------------------------------------------
+
+### Are there high demand items that we should have on our menu and what else do coffee drinkers want?
+
+**How to explore :** <font color="888888">To truly understand coffee drinkers, we add context to the words by grouping them into word-pairs. The</font> <font size="4" color="008b8b">**thicker**</font> <font color="888888">the line, the</font> <font size="4" color="008b8b">**the higher the number of times**</font> <font color="888888">it was used in the reviews, implying preference.</font>
+
+**Quick takes :** <font color="888888">We should consider incorporating</font> <font color="008b8b">_Cold Brew_</font><font color="888888">,</font> <font color="008b8b">_Oat Milk_</font> <font color="888888">and possibly</font> <font color="008b8b">_Chai Latte_</font> <font color="888888">into our menu as coffee drinkers seem to mention it often. Having</font> <font color="008b8b">_friendly service staff_</font> <font color="888888">is a must and we should probably cater for</font> <font color="008b8b">_outdoor seating_</font> <font color="888888">at our next outlet.</font>
+
+```{r}
+bigrams_interactive %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
+  geom_node_point(size = 3) +
+  geom_node_text(aes(label = name), repel = T,
+                 point.padding = unit(0.2, "lines")) +
+  theme_graph() +
+  theme(legend.position = "none")
+```
